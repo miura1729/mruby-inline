@@ -11,7 +11,86 @@
 static mrb_code *
 patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
 {
-  
+  mrb_code *send_pc;
+  mrb_code *ent;
+  mrb_code *curpos;
+  mrb_code code;
+  int i;
+
+  ent = dst->iseq + dst->ilen;
+  curpos = ent;
+  dst->ilen += src->ilen + 2;	/* 2 means meta info */
+  dst->iseq = mrb_realloc(mrb, dst->iseq, dst->ilen * sizeof(mrb_code));
+  send_pc = mrb->c->ci->pc - 1;
+
+  /* Meta data */
+  *(curpos++) = MKOP_A(OP_NOP, src->ilen); /* size */
+  *(curpos++) = MKOP_A(OP_NOP, src->ilen);
+
+  /* Patched inlined code */
+  for (i = 0; i < src->ilen; i++) {
+    code = src->iseq[i];
+    switch(GET_OPCODE(code)) {
+    case OP_RETURN:
+      code = MKOP_Bx(OP_JMP, send_pc - curpos);
+      break;
+    default:
+      /* do nothing */
+      break;
+    }
+
+    /* Shift regster number */
+    switch(optype_list[GET_OPCODE(code)]) {
+    case OPTYPE_NONE:
+    case OPTYPE_Bx:
+    case OPTYPE_sBx:
+    case OPTYPE_Ax:
+      /* do nothing */
+      break;
+
+    case OPTYPE_A:
+      code = MKOP_A(GET_OPCODE(code), GETARG_A(code) + a);
+      break;
+
+    case OPTYPE_AB:
+      code = MKOP_AB(GET_OPCODE(code), GETARG_A(code) + a, GETARG_B(code) + a);
+      break;
+
+    case OPTYPE_ABC:
+      code = MKOP_ABC(GET_OPCODE(code), 
+		      GETARG_A(code) + a, GETARG_B(code) + a, GETARG_C(code) + a);
+      break;
+
+    case OPTYPE_ABxC:
+      code = MKOP_ABC(GET_OPCODE(code), 
+		      GETARG_A(code) + a, GETARG_B(code), GETARG_C(code) + a);
+      break;
+
+    case OPTYPE_ABCx:
+      code = MKOP_ABC(GET_OPCODE(code), 
+		      GETARG_A(code) + a, GETARG_B(code) + a, GETARG_C(code));
+      break;
+
+
+    case OPTYPE_ABxCx:
+      code = MKOP_ABC(GET_OPCODE(code), 
+		      GETARG_A(code) + a, GETARG_B(code), GETARG_C(code));
+      break;
+
+    case OPTYPE_ABx:
+      code = MKOP_ABx(GET_OPCODE(code), GETARG_A(code) + a, GETARG_Bx(code));
+      break;
+
+    case OPTYPE_AsBx:
+      code = MKOP_AsBx(GET_OPCODE(code), GETARG_A(code) + a, GETARG_sBx(code));
+      break;
+
+    }
+
+    *(curpos++) = code;
+  }
+
+  return ent + 2;
 }
 
 static mrb_value
@@ -26,7 +105,6 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
   mrb_value *argv;
   mrb_value iml;
   mrb_value pobj;
-  mrb_code *send_pc;
   mrb_code *entry;
   int a;
 
@@ -41,10 +119,9 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
   callee_proc = mrb_proc_ptr(pobj);
   callee_irep = callee_proc->body.irep;
   a = mrb->c->ci->acc;
-  if (caller_irep->nregs < callee_irep + a) {
-    caller_irep->nregs = callee_irep + a;
+  if (caller_irep->nregs < callee_irep->nregs + a) {
+    caller_irep->nregs = callee_irep->nregs + a;
   }
-  send_pc = mrb->c->ci->pc - 1;
   entry = patch_irep_for_inline(mrb, callee_irep, caller_irep, a);
 
   return self;
