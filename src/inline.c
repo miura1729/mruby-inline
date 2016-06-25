@@ -2,30 +2,52 @@
 #include "mruby/class.h"
 #include "mruby/value.h"
 #include "mruby/variable.h"
-#include "mruby/data.h"
 #include "mruby/opcode.h"
 #include "mruby/irep.h"
 #include "mruby/hash.h"
 #include "mruby/proc.h"
+#include "opinfo.h"
+
+static mrb_code *
+patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
+{
+  
+}
 
 static mrb_value
 mrb_inline_missing(mrb_state *mrb, mrb_value self)
 {
+  struct RProc *caller_proc;
+  struct RProc *callee_proc;
+  mrb_irep *caller_irep;
+  mrb_irep *callee_irep;
+  mrb_value mid;
+  mrb_int argc;
+  mrb_value *argv;
+  mrb_value iml;
+  mrb_value pobj;
+  mrb_code *send_pc;
+  mrb_code *entry;
+  int a;
+
+  mrb_get_args(mrb, "o*", &mid, &argv, &argc);
+  
+  caller_proc = mrb->c->ci[-1].proc;
+  caller_irep = caller_proc->body.irep;
+
+  iml = mrb_obj_iv_get(mrb, mrb_obj_ptr(self), mrb_intern_lit(mrb, "__inline_method_list__"));
+  
+  pobj = mrb_hash_get(mrb, iml, mid);
+  callee_proc = mrb_proc_ptr(pobj);
+  callee_irep = callee_proc->body.irep;
+  a = mrb->c->ci->acc;
+  if (caller_irep->nregs < callee_irep + a) {
+    caller_irep->nregs = callee_irep + a;
+  }
+  send_pc = mrb->c->ci->pc - 1;
+  entry = patch_irep_for_inline(mrb, callee_irep, caller_irep, a);
+
   return self;
-}
-
-static void
-mrb_irepobj_free(mrb_state *mrb, void *ptr)
-{
-  /* Do nothing */
-}
-
-static struct mrb_data_type mrb_irep_type = { "Irep", mrb_irepobj_free };
-
-static mrb_value
-mrb_irep_wrap(mrb_state *mrb, struct RClass *tc, struct mrb_irep *irep)
-{
-  return mrb_obj_value(Data_Wrap_Struct(mrb, tc, &mrb_irep_type, irep));
 }
 
 static mrb_value
@@ -33,7 +55,6 @@ mrb_inline_make_inline_method(mrb_state *mrb, mrb_value self)
 {
   struct RObject *obj = mrb_obj_ptr(self);
   mrb_value iml;
-  mrb_irep *irep;
   struct RProc *m;
   mrb_value mid;
   struct RClass *c = mrb_class(mrb, self);
@@ -46,8 +67,7 @@ mrb_inline_make_inline_method(mrb_state *mrb, mrb_value self)
   }
 
   m = mrb_method_search_vm(mrb, &c, mrb_symbol(mid));
-  irep = m->body.irep;
-  mrb_hash_set(mrb, iml, mid, mrb_irep_wrap(mrb, c, irep));
+  mrb_hash_set(mrb, iml, mid, mrb_obj_value(m));
   mrb_obj_iv_set(mrb, obj, mrb_intern_lit(mrb, "__inline_method_list__"), iml);
   mrb_undef_method(mrb, c, mrb_sym2name(mrb, mrb_symbol(mid)));
 
