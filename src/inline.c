@@ -56,6 +56,9 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
     case OP_RETURN:
       code = MKOP_sBx(OP_JMP, send_pc - curpos + 1);
       break;
+    case OP_ENTER:
+      code = MKOPCODE(OP_NOP);
+      break;
     default:
       /* do nothing */
       break;
@@ -162,7 +165,10 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
   if (caller_irep->nregs < callee_irep->nregs + a) {
     caller_irep->nregs = callee_irep->nregs + a;
   }
-  entry = patch_irep_for_inline(mrb, callee_irep, caller_irep, a);
+  patch_irep_for_inline(mrb, callee_irep, caller_irep, a);
+
+  mrb->c->ci->pc--;
+  mrb->c->ci->target_class = 0;
 
   return self;
 }
