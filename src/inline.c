@@ -16,23 +16,45 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
   mrb_code *curpos;
   mrb_code code;
   int i;
+  size_t symbase = dst->slen;
+  size_t poolbase = dst->plen;
 
+  /* extend iseq */
   ent = dst->iseq + dst->ilen;
   curpos = ent;
   dst->ilen += src->ilen + 2;	/* 2 means meta info */
   dst->iseq = mrb_realloc(mrb, dst->iseq, dst->ilen * sizeof(mrb_code));
   send_pc = mrb->c->ci->pc - 1;
 
+  /* extend syms */
+  if (src->slen > 0) {
+    dst->slen += src->slen;
+    dst->syms = mrb_realloc(mrb, dst->syms, dst->slen * sizeof(mrb_sym));
+    for (i = 0; i < src->slen; i++) {
+      dst->syms[symbase + i] = src->syms[i];
+    }
+  }
+
+  /* extend pool */
+  if (src->plen > 0) {
+    dst->plen += src->plen;
+    dst->pool = mrb_realloc(mrb, dst->pool, dst->plen * sizeof(mrb_value));
+    for (i = 0; i < src->plen; i++) {
+      dst->pool[poolbase + i] = src->pool[i];
+    }
+  }
+
   /* Meta data */
   *(curpos++) = MKOP_A(OP_NOP, src->ilen); /* size */
   *(curpos++) = MKOP_A(OP_NOP, src->ilen);
+  *send_pc = MKOP_sBx(OP_JMP, curpos - send_pc);
 
   /* Patched inlined code */
   for (i = 0; i < src->ilen; i++) {
     code = src->iseq[i];
     switch(GET_OPCODE(code)) {
     case OP_RETURN:
-      code = MKOP_Bx(OP_JMP, send_pc - curpos);
+      code = MKOP_sBx(OP_JMP, send_pc - curpos + 1);
       break;
     default:
       /* do nothing */
@@ -61,6 +83,11 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
 		      GETARG_A(code) + a, GETARG_B(code) + a, GETARG_C(code) + a);
       break;
 
+    case OPTYPE_ABsC:
+      code = MKOP_ABC(GET_OPCODE(code), 
+		      GETARG_A(code) + a, GETARG_B(code) + symbase, GETARG_C(code) + a);
+      break;
+
     case OPTYPE_ABxC:
       code = MKOP_ABC(GET_OPCODE(code), 
 		      GETARG_A(code) + a, GETARG_B(code), GETARG_C(code) + a);
@@ -77,8 +104,21 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
 		      GETARG_A(code) + a, GETARG_B(code), GETARG_C(code));
       break;
 
+    case OPTYPE_ABsCx:
+      code = MKOP_ABC(GET_OPCODE(code), 
+		      GETARG_A(code) + a, GETARG_B(code) + symbase, GETARG_C(code));
+      break;
+
     case OPTYPE_ABx:
       code = MKOP_ABx(GET_OPCODE(code), GETARG_A(code) + a, GETARG_Bx(code));
+      break;
+
+    case OPTYPE_ABp:
+      code = MKOP_ABx(GET_OPCODE(code), GETARG_A(code) + a, GETARG_Bx(code) + poolbase);
+      break;
+
+    case OPTYPE_ABs:
+      code = MKOP_ABx(GET_OPCODE(code), GETARG_A(code) + a, GETARG_Bx(code) + symbase);
       break;
 
     case OPTYPE_AsBx:
