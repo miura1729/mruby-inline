@@ -171,6 +171,9 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
   caller_irep = caller_proc->body.irep;
 
   iml = mrb_obj_iv_get(mrb, mrb_class(mrb, self), mrb_intern_lit(mrb, "__inline_method_list__"));
+  if (mrb_nil_p(iml)) {
+  iml = mrb_obj_iv_get(mrb, mrb_class_ptr(self), mrb_intern_lit(mrb, "__inline_method_list__"));
+  }
   
   pobj = mrb_hash_get(mrb, iml, mid);
   mrb_p(mrb, iml);
@@ -205,6 +208,11 @@ mrb_inline_make_inline_method(mrb_state *mrb, mrb_value self)
   }
 
   m = mrb_method_search_vm(mrb, &c, mrb_symbol(mid));
+  if (m == NULL) {
+    c = mrb_class(mrb, self);
+    m = mrb_method_search_vm(mrb, &c, mrb_symbol(mid));
+  }
+
   mrb_hash_set(mrb, iml, mid, mrb_obj_value(m));
   mrb_obj_iv_set(mrb, obj, mrb_intern_lit(mrb, "__inline_method_list__"), iml);
   mrb_undef_method(mrb, c, mrb_sym2name(mrb, mrb_symbol(mid)));
@@ -220,7 +228,7 @@ mrb_inline_included(mrb_state *mrb, mrb_value self)
   
   mrb_get_args(mrb, "o", &klass);
   clsptr = mrb_class_ptr(klass);
-  mrb_define_singleton_method(mrb, clsptr, "make_inline_method", mrb_inline_make_inline_method, MRB_ARGS_REQ(1));
+  mrb_define_module_function(mrb, clsptr, "make_inline_method", mrb_inline_make_inline_method, MRB_ARGS_REQ(1));
 
   return mrb_nil_value();
 }
