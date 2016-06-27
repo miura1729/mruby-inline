@@ -27,7 +27,10 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
   dst->ilen += src->ilen + 2 + 1; /* 2 meta info 1 return(2word) */
   dst->iseq = mrb_realloc(mrb, dst->iseq, dst->ilen * sizeof(mrb_code));
 #ifdef MRBJIT
-  dst->jit_entry_tab = mrb_realloc(mrb, dst->jit_entry_tab, dst->ilen * sizeof(mrbjit_codetab));
+  mrb_free(mrb, dst->prof_info);
+  mrb_free(mrb, dst->jit_entry_tab);
+  mrbjit_make_jit_entry_tab(mrb, dst, dst->ilen);
+  dst->prof_info = (int *)mrb_calloc(mrb, dst->ilen, sizeof(int));
 #endif
   send_pc =  dst->iseq + pcoff - 1;
   ent = dst->iseq + entpos;
@@ -176,8 +179,8 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
   }
   
   pobj = mrb_hash_get(mrb, iml, mid);
-  mrb_p(mrb, iml);
-  mrb_p(mrb, mid);
+  /*mrb_p(mrb, iml);
+    mrb_p(mrb, mid);*/
   callee_proc = mrb_proc_ptr(pobj);
   callee_irep = callee_proc->body.irep;
   a = mrb->c->ci->acc;
