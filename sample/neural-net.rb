@@ -51,13 +51,13 @@ class Array
   end
   alias reduce inject
 
-  def collect(&block)
+  def map(&block)
     ary = []
     self.each{|val| ary.push(block.call(val))}
     ary
   end
-  alias map collect
-#  make_inline_method  :map
+#  alias map collect
+  make_inline_method  :map
 end
 
 class DeterministicRandom

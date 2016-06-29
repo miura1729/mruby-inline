@@ -8,6 +8,54 @@
 #include "mruby/proc.h"
 #include "opinfo.h"
 
+static mrb_irep *
+copy_irep(mrb_state *mrb, mrb_irep *irep)
+{
+  mrb_irep *nirep = mrb_add_irep(mrb);
+  int i;
+
+  *nirep = *irep;
+  nirep->iseq = (mrb_code*)mrb_malloc(mrb, sizeof(mrb_code)*irep->ilen);
+  for (i = 0; i < irep->ilen; i++) {
+    nirep->iseq[i] = irep->iseq[i];
+  }
+
+  nirep->reps = (mrb_irep**)mrb_malloc(mrb, sizeof(mrb_irep*)*irep->rlen);
+  for (i = 0; i < irep->rlen; i++) {
+    nirep->reps[i] = copy_irep(mrb, irep->reps[i]);
+  }
+
+  return nirep;
+}
+
+static void
+patch_reps(mrb_state *mrb, mrb_irep *irep, int a, int level) {
+  int i;
+
+  for (i = 0; i < irep->ilen; i++) {
+    mrb_code code = irep->iseq[i];
+    switch (GET_OPCODE(code)) {
+    case OP_GETUPVAR:
+    case OP_SETUPVAR:
+      if (level == GETARG_C(code)) {
+	code = MKOP_ABC(GET_OPCODE(code), 
+			GETARG_A(code), GETARG_B(code) + a, level);
+	irep->iseq[i] = code;
+      }
+
+      break;
+
+    default:
+      /* Do nothing */
+      break;
+    }
+  }
+
+  for (i = 0; i < irep->rlen; i++) {
+    patch_reps(mrb, irep->reps[i], a, level + 1);
+  }
+}
+
 static mrb_code *
 patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
 {
@@ -18,6 +66,7 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
   int i;
   size_t symbase = dst->slen;
   size_t poolbase = dst->plen;
+  size_t repsbase = dst->rlen;
   size_t entpos;
   size_t pcoff;
 
@@ -54,6 +103,15 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
     }
   }
 
+  /* extend reps */
+  if (src->rlen > 0) {
+    dst->rlen += src->rlen;
+    dst->reps = mrb_realloc(mrb, dst->reps, dst->rlen * sizeof(mrb_irep *));
+    for (i = 0; i < src->rlen; i++) {
+      dst->reps[repsbase + i] = copy_irep(mrb, src->reps[i]);
+    }
+  }
+
   /* Meta data */
   *(curpos++) = MKOP_A(OP_NOP, src->ilen); /* size */
   *(curpos++) = MKOP_A(OP_NOP, src->ilen);
@@ -71,6 +129,11 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
 
     case OP_LOADSELF:
       code = MKOP_AB(OP_MOVE, GETARG_A(code), 0);
+      break;
+
+    case OP_LAMBDA:
+      code = MKOP_Abc(OP_LAMBDA, GETARG_A(code), GETARG_b(code) + repsbase, GETARG_c(code));
+      patch_reps(mrb, dst->reps[GETARG_b(code)], a, 0);
       break;
 
     case OP_ENTER:
@@ -167,8 +230,12 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
   mrb_value iml;
   mrb_value pobj;
   int a;
+  int i;
 
   mrb_get_args(mrb, "o*", &mid, &argv, &argc);
+  for (i = 0; i < argc; i++) {
+    mrb->c->stack[i + 1] = mrb->c->stack[i + 2];
+  }
   
   caller_proc = mrb->c->ci[-1].proc;
   caller_irep = caller_proc->body.irep;
