@@ -8,6 +8,8 @@
 #include "mruby/proc.h"
 #include "opinfo.h"
 
+void mrb_method_missing(mrb_state *mrb, mrb_sym name, mrb_value self, mrb_value args);
+
 static mrb_irep *
 copy_irep(mrb_state *mrb, mrb_irep *irep)
 {
@@ -69,12 +71,21 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
   size_t repsbase = dst->rlen;
   size_t entpos;
   size_t pcoff;
+  int jmpptr;
+  mrb_code jmptab[100];
 
   /* extend iseq */
   entpos = dst->ilen;
   pcoff = mrb->c->ci->pc - dst->iseq;
-  dst->ilen += src->ilen + 2 + 1; /* 2 meta info 1 return(2word) */
-  dst->iseq = mrb_realloc(mrb, dst->iseq, dst->ilen * sizeof(mrb_code));
+  dst->ilen += src->ilen + 2 + 2; /* 2 meta info 1 return(2word) */
+  if (dst->flags & MRB_ISEQ_NO_FREE)  {
+    mrb_code *new = mrb_malloc(mrb, dst->ilen * sizeof(mrb_code));
+    memcpy(new, dst->iseq, dst->ilen * sizeof(mrb_code));
+    dst->iseq = new;
+  }
+  else {
+    dst->iseq = mrb_realloc(mrb, dst->iseq, dst->ilen * sizeof(mrb_code));
+  }
 #ifdef MRBJIT
   mrb_free(mrb, dst->prof_info);
   mrb_free(mrb, dst->jit_entry_tab);
@@ -112,15 +123,77 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
     }
   }
 
+  /* Patched inlined code */
+  /* Jump address adjust instruction inclrease */
+  jmpptr = 0;
+  for (i = 0; i < src->ilen; i++) {
+    int incnum = 0;
+    int j;
+    int off;
+    
+    code = src->iseq[i];
+    switch(GET_OPCODE(code)) {
+    case OP_JMP:
+    case OP_JMPIF:
+    case OP_JMPNOT:
+      off = GETARG_sBx(code);
+      incnum = 0;
+      if (off > 0) {
+	for (j = i + 1; j <= i + off; j++) {
+	  mrb_code cd = src->iseq[j];
+	  switch (GET_OPCODE(cd)) {
+	  case OP_RETURN:
+	    incnum++;
+	    break;
+	  }
+	}
+      }
+      else {
+	for (j = i + off - 1; j < i; j++) {
+	  mrb_code cd = src->iseq[j];
+	  switch (GET_OPCODE(cd)) {
+	  case OP_RETURN:
+	    incnum--;
+	    break;
+	  }
+	}
+      }
+      break;
+
+    default:
+      break;
+    }
+
+    switch(GET_OPCODE(code)) {
+    case OP_JMP:
+      jmptab[jmpptr++] = MKOP_sBx(GET_OPCODE(code), GETARG_sBx(code) + incnum);
+      break;
+
+    case OP_JMPIF:
+    case OP_JMPNOT:
+      jmptab[jmpptr++] = MKOP_AsBx(GET_OPCODE(code), GETARG_A(code), GETARG_sBx(code) + incnum);
+      break;
+      
+    default:
+      break;
+    }
+  }
+
   /* Meta data */
   *(curpos++) = MKOP_A(OP_NOP, src->ilen); /* size */
   *(curpos++) = MKOP_A(OP_NOP, src->ilen);
   *send_pc = MKOP_sBx(OP_JMP, curpos - send_pc);
 
-  /* Patched inlined code */
+  jmpptr = 0;
   for (i = 0; i < src->ilen; i++) {
     code = src->iseq[i];
     switch(GET_OPCODE(code)) {
+    case OP_JMP:
+    case OP_JMPIF:
+    case OP_JMPNOT:
+      code = jmptab[jmpptr++];
+      break;
+
     case OP_RETURN:
       code = MKOP_AB(OP_MOVE, a, GETARG_A(code) + a);
       *(curpos++) = code;
@@ -233,7 +306,7 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
   int i;
 
   mrb_get_args(mrb, "o*", &mid, &argv, &argc);
-  for (i = 0; i < argc; i++) {
+  for (i = 0; i < argc + 2; i++) {
     mrb->c->stack[i + 1] = mrb->c->stack[i + 2];
   }
   
@@ -242,12 +315,16 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
 
   iml = mrb_obj_iv_get(mrb, mrb_class(mrb, self), mrb_intern_lit(mrb, "__inline_method_list__"));
   if (mrb_nil_p(iml)) {
-  iml = mrb_obj_iv_get(mrb, mrb_class_ptr(self), mrb_intern_lit(mrb, "__inline_method_list__"));
+    iml = mrb_obj_iv_get(mrb, mrb_class_ptr(self), mrb_intern_lit(mrb, "__inline_method_list__"));
+    if (mrb_nil_p(iml)) {
+      mrb_method_missing(mrb, mrb_symbol(mid), self, argv[0]);
+      return self;
+    }
   }
   
   pobj = mrb_hash_get(mrb, iml, mid);
-  /*mrb_p(mrb, iml);
-    mrb_p(mrb, mid);*/
+  /*mrb_p(mrb, iml);*/
+  /*mrb_p(mrb, mid);*/
   callee_proc = mrb_proc_ptr(pobj);
   callee_irep = callee_proc->body.irep;
   a = mrb->c->ci->acc;
@@ -310,7 +387,7 @@ mrb_mruby_inline_gem_init(mrb_state *mrb)
 
   inlin = mrb_define_module(mrb, "Inline");
   mrb_define_class_method(mrb, inlin, "included", mrb_inline_included, MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, inlin, "method_missing",          mrb_inline_missing,          MRB_ARGS_ANY());
+  mrb_define_method(mrb, inlin, "method_missing", mrb_inline_missing, MRB_ARGS_ANY());
 }
 
 void
