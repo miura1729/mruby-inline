@@ -1,4 +1,5 @@
 #include "mruby.h"
+#include "mruby/array.h"
 #include "mruby/class.h"
 #include "mruby/value.h"
 #include "mruby/variable.h"
@@ -302,13 +303,16 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
   mrb_value *argv;
   mrb_value iml;
   mrb_value pobj;
+  mrb_value block;
   int a;
   int i;
 
-  mrb_get_args(mrb, "o*", &mid, &argv, &argc);
-  for (i = 0; i < argc + 2; i++) {
-    mrb->c->stack[i + 1] = mrb->c->stack[i + 2];
+  mrb_get_args(mrb, "*!&", &argv, &argc, &block);
+  mid = argv[0];
+  for (i = 1; i < argc; i++) {
+    mrb->c->stack[i] = argv[i];
   }
+  mrb->c->stack[argc] = block;
   
   caller_proc = mrb->c->ci[-1].proc;
   caller_irep = caller_proc->body.irep;
@@ -317,10 +321,11 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
   if (mrb_nil_p(iml)) {
     iml = mrb_obj_iv_get(mrb, mrb_class_ptr(self), mrb_intern_lit(mrb, "__inline_method_list__"));
     if (mrb_nil_p(iml)) {
-      mrb_method_missing(mrb, mrb_symbol(mid), self, argv[0]);
+      mrb_method_missing(mrb, mrb_symbol(mid), self, mrb_ary_new_from_values(mrb, argc, argv));
       return self;
     }
   }
+  //mrb_p(mrb, iml);
   
   pobj = mrb_hash_get(mrb, iml, mid);
   /*mrb_p(mrb, iml);*/
