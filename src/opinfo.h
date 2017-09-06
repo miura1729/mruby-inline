@@ -45,10 +45,14 @@ static enum optype optype_list[] = {
   /* OP_GETSPECIAL,A Bx    R(A) := Special[Bx]                             */
   OPTYPE_ABx,
   /* OP_SETSPECIAL,A Bx    Special[Bx] := R(A)                             */
-  OPTYPE_ABx,
+  OPTYPE_ABx, 
   /* OP_GETIV,     A Bx    R(A) := ivget(Syms(Bx))                         */
   OPTYPE_ABs,
-  /* OP_SETIV,     A Bx    ivset(Syms(Bx),R(A))                            */
+  /* OP_GETIV2,     A Bx    R(A) := ivget(Syms(Bx))                         */
+  OPTYPE_ABs,
+ /* OP_SETIV,     A Bx    ivset(Syms(Bx),R(A))                            */
+  OPTYPE_ABs,
+ /* OP_SETIV2,     A Bx    ivset(Syms(Bx),R(A))                            */
   OPTYPE_ABs,
   /* OP_GETCV,     A Bx    R(A) := cvget(Syms(Bx))                         */
   OPTYPE_ABs,

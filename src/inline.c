@@ -73,29 +73,12 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
   size_t entpos;
   size_t pcoff;
   int jmpptr;
+  int excodenum;
   mrb_code jmptab[100];
 
   /* extend iseq */
   entpos = dst->ilen;
   pcoff = mrb->c->ci->pc - dst->iseq;
-  dst->ilen += src->ilen + 2 + 2; /* 2 meta info 1 return(2word) */
-  if (dst->flags & MRB_ISEQ_NO_FREE)  {
-    mrb_code *new = mrb_malloc(mrb, dst->ilen * sizeof(mrb_code));
-    memcpy(new, dst->iseq, dst->ilen * sizeof(mrb_code));
-    dst->iseq = new;
-  }
-  else {
-    dst->iseq = mrb_realloc(mrb, dst->iseq, dst->ilen * sizeof(mrb_code));
-  }
-#ifdef MRBJIT
-  mrb_free(mrb, dst->prof_info);
-  mrb_free(mrb, dst->jit_entry_tab);
-  mrbjit_make_jit_entry_tab(mrb, dst, dst->ilen);
-  dst->prof_info = (int *)mrb_calloc(mrb, dst->ilen, sizeof(int));
-#endif
-  send_pc =  dst->iseq + pcoff - 1;
-  ent = dst->iseq + entpos;
-  curpos = ent;
 
   /* extend syms */
   if (src->slen > 0) {
@@ -125,8 +108,9 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
   }
 
   /* Patched inlined code */
-  /* Jump address adjust instruction inclrease */
+  /* Jump address adjust instruction inclrease and count new isize */
   jmpptr = 0;
+  excodenum = 0;
   for (i = 0; i < src->ilen; i++) {
     int incnum = 0;
     int j;
@@ -144,6 +128,7 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
 	  mrb_code cd = src->iseq[j];
 	  switch (GET_OPCODE(cd)) {
 	  case OP_RETURN:
+	  case OP_GETIV:
 	    incnum++;
 	    break;
 	  }
@@ -154,6 +139,7 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
 	  mrb_code cd = src->iseq[j];
 	  switch (GET_OPCODE(cd)) {
 	  case OP_RETURN:
+	  case OP_GETIV:
 	    incnum--;
 	    break;
 	  }
@@ -166,6 +152,12 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
     }
 
     switch(GET_OPCODE(code)) {
+      /* increse instructions */
+    case OP_RETURN:
+    case OP_GETIV:
+      excodenum++;
+      break;
+
     case OP_JMP:
       jmptab[jmpptr++] = MKOP_sBx(GET_OPCODE(code), GETARG_sBx(code) + incnum);
       break;
@@ -179,6 +171,28 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
       break;
     }
   }
+
+  dst->ilen += src->ilen + 2 + excodenum; /* 2 is meta info */
+  if (dst->flags & MRB_ISEQ_NO_FREE)  {
+    mrb_code *new = mrb_malloc(mrb, dst->ilen * sizeof(mrb_code));
+    memcpy(new, dst->iseq, dst->ilen * sizeof(mrb_code));
+    dst->iseq = new;
+  }
+  else {
+    dst->iseq = mrb_realloc(mrb, dst->iseq, dst->ilen * sizeof(mrb_code));
+  }
+#ifdef MRBJIT
+  mrb_free(mrb, dst->prof_info);
+  if (dst->jit_entry_tab) {
+    mrb_free(mrb, dst->jit_entry_tab->body);
+    mrb_free(mrb, dst->jit_entry_tab);
+  }
+  mrbjit_make_jit_entry_tab(mrb, dst, dst->ilen);
+  dst->prof_info = (int *)mrb_calloc(mrb, dst->ilen, sizeof(int));
+#endif
+  send_pc =  dst->iseq + pcoff - 1;
+  ent = dst->iseq + entpos;
+  curpos = ent;
 
   /* Meta data */
   *(curpos++) = MKOP_A(OP_NOP, src->ilen); /* size */
@@ -199,6 +213,12 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
       code = MKOP_AB(OP_MOVE, a, GETARG_A(code) + a);
       *(curpos++) = code;
       code = MKOP_sBx(OP_JMP, send_pc - curpos + 1);
+      break;
+
+
+    case OP_GETIV:
+      *(curpos++) = MKOP_AB(OP_MOVE, GETARG_A(code) + a, a);
+      code = MKOP_ABx(OP_GETIV2, GETARG_A(code), GETARG_Bx(code));
       break;
 
     case OP_LOADSELF:
