@@ -57,7 +57,7 @@ class Array
     ary
   end
 #  alias map collect
-  make_inline_method  :map
+#  make_inline_method  :map
 end
 
 class DeterministicRandom

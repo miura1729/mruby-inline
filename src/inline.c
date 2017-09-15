@@ -18,7 +18,8 @@ copy_irep(mrb_state *mrb, mrb_irep *irep)
   int i;
 
   *nirep = *irep;
-  nirep->iseq = (mrb_code*)mrb_malloc(mrb, sizeof(mrb_code)*irep->ilen);
+  /* 3 means reserved meta area */
+  nirep->iseq = (mrb_code*)mrb_malloc(mrb, sizeof(mrb_code)*(irep->ilen + 3));
   for (i = 0; i < irep->ilen; i++) {
     nirep->iseq[i] = irep->iseq[i];
   }
@@ -48,6 +49,12 @@ patch_reps(mrb_state *mrb, mrb_irep *irep, int a, int level) {
 
       break;
 
+    case OP_ENTER:
+      
+      code = irep->iseq[i];
+      //      irep->iseq[i++] = MKOP_Ax(OP_NOP, 0);
+      irep->iseq[i] = code;
+      
     default:
       /* Do nothing */
       break;
@@ -79,6 +86,10 @@ patch_irep_for_inline(mrb_state *mrb, mrb_irep *src, mrb_irep *dst, int a)
   /* extend iseq */
   entpos = dst->ilen;
   pcoff = mrb->c->ci->pc - dst->iseq;
+
+  /* extend regarea */
+  dst->nregs += src->nregs;
+  mrb->c->ci[-1].nregs = dst->nregs;
 
   /* extend syms */
   if (src->slen > 0) {
@@ -316,6 +327,7 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
 {
   struct RProc *caller_proc;
   struct RProc *callee_proc;
+  struct RClass *curcls;
   mrb_irep *caller_irep;
   mrb_irep *callee_irep;
   mrb_value mid;
@@ -329,14 +341,6 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "*!&", &argv, &argc, &block);
   mid = argv[0];
-  for (i = 1; i < argc; i++) {
-    mrb->c->stack[i] = argv[i];
-  }
-  mrb->c->stack[argc] = block;
-  
-  caller_proc = mrb->c->ci[-1].proc;
-  caller_irep = caller_proc->body.irep;
-
   iml = mrb_obj_iv_get(mrb, mrb_class(mrb, self), mrb_intern_lit(mrb, "__inline_method_list__"));
   if (mrb_nil_p(iml)) {
     iml = mrb_obj_iv_get(mrb, mrb_class_ptr(self), mrb_intern_lit(mrb, "__inline_method_list__"));
@@ -347,15 +351,33 @@ mrb_inline_missing(mrb_state *mrb, mrb_value self)
   }
   //mrb_p(mrb, iml);
   
+
+  for (i = 1; i < argc; i++) {
+    mrb->c->stack[i] = argv[i];
+  }
+  mrb->c->stack[argc] = block;
+  caller_proc = mrb->c->ci[-1].proc;
+  caller_irep = caller_proc->body.irep;
+  curcls = mrb_class(mrb, self);
+  if (curcls != mrb->c->ci->target_class && 0) {
+    /* duplicate irep and proc and redefine as method for current class */
+    mrb_irep *nirep = mrb_add_irep(mrb);
+    struct RProc *nproc;
+
+    *nirep = *caller_irep;
+    caller_irep = nirep;
+    nproc = (struct RProc*)mrb_obj_alloc(mrb, MRB_TT_PROC, mrb->proc_class);
+    mrb_proc_copy(nproc, caller_proc);
+    caller_proc = nproc;
+    mrb_define_method_raw(mrb, curcls, mrb_symbol(mid), caller_proc);
+  }
+
   pobj = mrb_hash_get(mrb, iml, mid);
   /*mrb_p(mrb, iml);*/
   /*mrb_p(mrb, mid);*/
   callee_proc = mrb_proc_ptr(pobj);
   callee_irep = callee_proc->body.irep;
   a = mrb->c->ci->acc;
-  if (caller_irep->nregs < callee_irep->nregs + a) {
-    caller_irep->nregs = callee_irep->nregs + a;
-  }
 
   mrb->c->ci->pc =  patch_irep_for_inline(mrb, callee_irep, caller_irep, a);
   mrb->c->ci->target_class = 0;
@@ -383,6 +405,10 @@ mrb_inline_make_inline_method(mrb_state *mrb, mrb_value self)
   if (m == NULL) {
     c = mrb_class(mrb, self);
     m = mrb_method_search_vm(mrb, &c, mrb_symbol(mid));
+    c = mrb_class(mrb, self);
+  }
+  else {
+    c = mrb_class_ptr(self);
   }
 
   mrb_hash_set(mrb, iml, mid, mrb_obj_value(m));
@@ -401,6 +427,7 @@ mrb_inline_included(mrb_state *mrb, mrb_value self)
   mrb_get_args(mrb, "o", &klass);
   clsptr = mrb_class_ptr(klass);
   mrb_define_module_function(mrb, clsptr, "make_inline_method", mrb_inline_make_inline_method, MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, clsptr, "method_missing", mrb_inline_missing, MRB_ARGS_ANY());
 
   return mrb_nil_value();
 }
@@ -412,7 +439,6 @@ mrb_mruby_inline_gem_init(mrb_state *mrb)
 
   inlin = mrb_define_module(mrb, "Inline");
   mrb_define_class_method(mrb, inlin, "included", mrb_inline_included, MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, inlin, "method_missing", mrb_inline_missing, MRB_ARGS_ANY());
 }
 
 void
